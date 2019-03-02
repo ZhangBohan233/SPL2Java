@@ -168,7 +168,7 @@ public class AbstractSyntaxTree {
 
     void addDef(Position pos, String functionName) {
         if (inner == null) {
-            DefStmt ds = new DefStmt(pos, functionName);
+            DefStmt ds = new DefStmt(pos, new NameNode(pos, functionName));
             stack.push(ds);
             inner = new AbstractSyntaxTree();
         } else {
@@ -178,7 +178,7 @@ public class AbstractSyntaxTree {
 
     void addCall(Position pos, String functionName) {
         if (inner == null) {
-            FunctionCall functionCall = new FunctionCall(pos, functionName);
+            FunctionCall functionCall = new FunctionCall(pos, new NameNode(pos, functionName));
             stack.push(functionCall);
             inner = new AbstractSyntaxTree();
         } else {
@@ -328,7 +328,9 @@ public class AbstractSyntaxTree {
 
     void buildAst() {
         if (inner.inner == null) {
-            stack.add(inner.getBlock());
+            BlockStmt blockStmt = inner.getBlock();
+//            traverseEnvironmentVariables(blockStmt);
+            stack.add(blockStmt);
             inner = null;
         } else {
             inner.buildAst();

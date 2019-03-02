@@ -9,7 +9,8 @@ public class Interpreter {
     }
 
     public Object interpret(BlockStmt root) {
-        Environment env = new Environment(Environment.GLOBAL_SCOPE, null);
+
+        Environment env = new Environment(Environment.GLOBAL_SCOPE, null, root.getVariableCount());
 
         long st = System.currentTimeMillis();
         Object obj = root.evaluate(env);

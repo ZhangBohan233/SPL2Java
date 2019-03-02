@@ -1,9 +1,6 @@
 package parser;
 
-import interpreter.Environment;
-import interpreter.Function;
-import interpreter.ParameterPair;
-import interpreter.SplException;
+import interpreter.*;
 import tokenizer.Position;
 import tokenizer.TokenLib;
 import util.Utility;
@@ -66,9 +63,20 @@ abstract class LeafNode extends Node {
     }
 }
 
+abstract class InternalNode extends Node {
+
+    InternalNode(final Position position) {
+        super(position);
+    }
+
+    public abstract void lookUp(EnvOptimizer envOptimizer);
+}
+
 class NameNode extends LeafNode {
 
     String name;
+
+    Variable variable;
 
     NameNode(final Position position, String name) {
         super(position);
@@ -77,9 +85,28 @@ class NameNode extends LeafNode {
         nodeType = NAME_NODE;
     }
 
+    void setVariable(int varLevel, EnvOptimizer envOptimizer) {
+        switch (varLevel) {
+            case Parser.ASSIGN:
+                variable = envOptimizer.get(name);
+                break;
+            case Parser.VAR:
+                variable = envOptimizer.addVar(name);
+                break;
+            case Parser.CONST:
+                break;
+            case Parser.GET:
+                variable = envOptimizer.get(name);
+                break;
+            default:
+                throw new SplException("sss");
+        }
+    }
+
     @Override
     public Object evaluate(Environment env) {
-        return env.get(name, position);
+//        return env.get(name, position);
+        return env.get(variable, position);
     }
 
     @Override
@@ -199,7 +226,7 @@ class LiteralNode extends LeafNode {
     }
 }
 
-abstract class BinaryExpr extends Node {
+abstract class BinaryExpr extends InternalNode {
 
     protected Node left;
     protected Node right;
@@ -247,21 +274,28 @@ class AssignmentNode extends BinaryExpr {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        ((NameNode) left).setVariable(varLevel, envOptimizer);
+        if (right instanceof InternalNode) {
+            ((InternalNode) right).lookUp(envOptimizer);
+        } else if (right instanceof NameNode) {
+            ((NameNode) right).setVariable(Parser.GET, envOptimizer);
+        }
+    }
+
+    @Override
     public Object evaluate(Environment env) {
-        String leftName = ((NameNode) left).name;
+        Variable leftName = ((NameNode) left).variable;
         Object rightObj = right.evaluate(env);
         switch (varLevel) {
             case Parser.ASSIGN:
                 env.assign(leftName, rightObj, position);
                 break;
             case Parser.CONST:
-                env.defineConst(leftName, rightObj, position);
+//                env.defineConst(leftName, rightObj, position);
                 break;
             case Parser.VAR:
                 env.defineVar(leftName, rightObj, position);
-                break;
-            case Parser.LET:
-                env.defineLocal(leftName, rightObj, position);
                 break;
             default:
                 throw new SplException("Unknown variable level");
@@ -293,6 +327,19 @@ class BinaryOperator extends BinaryExpr {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        if (left instanceof NameNode) {
+            ((NameNode) left).setVariable(Parser.GET, envOptimizer);
+        }
+        if (right instanceof NameNode) {
+            ((NameNode) right).setVariable(Parser.GET, envOptimizer);
+        }
+        if (right instanceof InternalNode) {
+            ((InternalNode) right).lookUp(envOptimizer);
+        }
+    }
+
+    @Override
     public Object evaluate(Environment env) {
         Object leftObj = left.evaluate(env);
         if (symbol.equals("||") || symbol.equals("&&")) {  // performs lazy evaluation
@@ -319,7 +366,7 @@ class BinaryOperator extends BinaryExpr {
 
 }
 
-class UnaryExpr extends Node {
+class UnaryExpr extends InternalNode {
 
     private Node value;
     private String symbol;
@@ -358,12 +405,19 @@ class UnaryExpr extends Node {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        if (value instanceof InternalNode) {
+            ((InternalNode) value).lookUp(envOptimizer);
+        }
+    }
+
+    @Override
     public Object evaluate(Environment env) {
         return null;
     }
 }
 
-abstract class ConditionStmt extends Node {
+abstract class ConditionStmt extends InternalNode {
 
     BlockStmt condition;
     Node doBlock;
@@ -377,6 +431,8 @@ class IfStmt extends ConditionStmt {
 
     Node elseBlock;
 
+    private VariableCount[] variableCounts;  // {countOfDoBlock, countOfElseBlock}
+
     IfStmt(final Position position) {
         super(position);
 
@@ -386,16 +442,37 @@ class IfStmt extends ConditionStmt {
     @Override
     public Object evaluate(Environment env) {
         Boolean result = (Boolean) condition.evaluate(env);
-        Environment inner = new Environment(Environment.SUB_SCOPE, env);
+
         if (result) {
+            Environment inner = new Environment(Environment.SUB_SCOPE, env, variableCounts[0]);
             return doBlock.evaluate(inner);
         } else if (elseBlock != null) {
+            Environment inner = new Environment(Environment.SUB_SCOPE, env, variableCounts[1]);
             return elseBlock.evaluate(inner);
         } else return null;
+    }
+
+    @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        condition.lookUp(envOptimizer);
+        variableCounts = new VariableCount[2];
+
+        if (doBlock instanceof InternalNode) {
+            EnvOptimizer inner = new EnvOptimizer(Environment.SUB_SCOPE, envOptimizer);
+            ((InternalNode) doBlock).lookUp(inner);
+            variableCounts[0] = new VariableCount(inner.getVariableCounter(), inner.getConstCounter());
+        }
+        if (elseBlock instanceof InternalNode) {
+            EnvOptimizer inner = new EnvOptimizer(Environment.SUB_SCOPE, envOptimizer);
+            ((InternalNode) elseBlock).lookUp(inner);
+            variableCounts[1] = new VariableCount(inner.getVariableCounter(), inner.getConstCounter());
+        }
     }
 }
 
 class WhileStmt extends ConditionStmt {
+
+    private VariableCount[] variableCounts;  // {countTitleBlock, countDoBlock}
 
     WhileStmt(final Position position) {
         super(position);
@@ -417,9 +494,23 @@ class WhileStmt extends ConditionStmt {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        EnvOptimizer titleOptimizer = new EnvOptimizer(Environment.LOOP_SCOPE, envOptimizer);
+        EnvOptimizer innerOptimizer = new EnvOptimizer(Environment.SUB_SCOPE, titleOptimizer);
+
+        condition.lookUp(titleOptimizer);
+        if (doBlock instanceof InternalNode) {
+            ((InternalNode) doBlock).lookUp(innerOptimizer);
+        }
+        variableCounts = new VariableCount[2];
+        variableCounts[0] = titleOptimizer.getVariableCount();
+        variableCounts[1] = innerOptimizer.getVariableCount();
+    }
+
+    @Override
     public Object evaluate(Environment env) {
-        Environment titleScope = new Environment(Environment.LOOP_SCOPE, env);
-        Environment innerScope = new Environment(Environment.SUB_SCOPE, titleScope);
+        Environment titleScope = new Environment(Environment.LOOP_SCOPE, env, variableCounts[0]);
+        Environment innerScope = new Environment(Environment.SUB_SCOPE, titleScope, variableCounts[1]);
         Object result = null;
         while (!titleScope.broken && (Boolean) condition.evaluate(titleScope)) {
             innerScope.invalidate();
@@ -431,6 +522,8 @@ class WhileStmt extends ConditionStmt {
 }
 
 class ForLoopStmt extends ConditionStmt {
+
+    VariableCount[] variableCounts;
 
     ForLoopStmt(final Position position) {
         super(position);
@@ -452,6 +545,42 @@ class ForLoopStmt extends ConditionStmt {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        int partCount = condition.lineCount();
+        if (partCount == 2) {
+//            return evalForEachLoop(env);
+        } else if (partCount == 3) {
+            forLoopLookUp(envOptimizer);
+        } else {
+            throw new SplException("Unknown syntax of for-loop");
+        }
+    }
+
+    private void forLoopLookUp(EnvOptimizer envOptimizer) {
+        EnvOptimizer titleOptimizer = new EnvOptimizer(Environment.LOOP_SCOPE, envOptimizer);
+        EnvOptimizer innerOptimizer = new EnvOptimizer(Environment.SUB_SCOPE, titleOptimizer);
+
+        Node start = condition.getLine(0);
+        Node end = condition.getLine(1);
+        Node step = condition.getLine(2);
+        if (start instanceof InternalNode) {
+            ((InternalNode) start).lookUp(titleOptimizer);
+        }
+        if (end instanceof InternalNode) {
+            ((InternalNode) end).lookUp(titleOptimizer);
+        }
+        if (step instanceof InternalNode) {
+            ((InternalNode) step).lookUp(titleOptimizer);
+        }
+        if (doBlock instanceof InternalNode) {
+            ((InternalNode) doBlock).lookUp(innerOptimizer);
+        }
+        variableCounts = new VariableCount[2];
+        variableCounts[0] = titleOptimizer.getVariableCount();
+        variableCounts[1] = innerOptimizer.getVariableCount();
+    }
+
+    @Override
     public Object evaluate(Environment env) {
         int partCount = condition.lineCount();
         if (partCount == 2) {
@@ -464,8 +593,8 @@ class ForLoopStmt extends ConditionStmt {
     }
 
     private Object evalForLoop(Environment env) {
-        Environment titleScope = new Environment(Environment.LOOP_SCOPE, env);
-        Environment innerScope = new Environment(Environment.SUB_SCOPE, titleScope);
+        Environment titleScope = new Environment(Environment.LOOP_SCOPE, env, variableCounts[0]);
+        Environment innerScope = new Environment(Environment.SUB_SCOPE, titleScope, variableCounts[1]);
         Node start = condition.getLine(0);
         Node end = condition.getLine(1);
         Node step = condition.getLine(2);
@@ -523,15 +652,17 @@ class ContinueStmt extends Node {
     }
 }
 
-class DefStmt extends Node {
+class DefStmt extends InternalNode {
 
-    String name;
+    NameNode name;
 
     BlockStmt params;
 
     BlockStmt body;
 
-    DefStmt(final Position position, final String functionName) {
+    VariableCount variableCount;
+
+    DefStmt(final Position position, final NameNode functionName) {
         super(position);
 
         name = functionName;
@@ -544,8 +675,24 @@ class DefStmt extends Node {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        name.variable = envOptimizer.addVar(name.name);
+        EnvOptimizer functionOptimizer = new EnvOptimizer(Environment.FUNCTION_SCOPE, envOptimizer);
+        for (Node node : params.getLines()) {
+            if (node instanceof NameNode) {
+                functionOptimizer.addVar(((NameNode) node).name);
+                ((NameNode) node).setVariable(Parser.VAR, functionOptimizer);
+            } else if (node instanceof AssignmentNode) {
+                // TODO
+            }
+        }
+        body.lookUp(functionOptimizer);
+        variableCount = functionOptimizer.getVariableCount();
+    }
+
+    @Override
     public Object evaluate(Environment env) {
-        Function function = new Function(position, env);
+        Function function = new Function(position, env, variableCount);
 
         int paramsLength = params.lineCount();
         ParameterPair[] pairs = new ParameterPair[paramsLength];
@@ -553,11 +700,11 @@ class DefStmt extends Node {
         for (int i = 0; i < paramsLength; i++) {
             Node node = params.getLine(i);
             if (node.nodeType == NAME_NODE) {
-                pairs[i] = new ParameterPair(((NameNode) node).name, null);
+                pairs[i] = new ParameterPair(((NameNode) node).variable, null);
             } else if (node.nodeType == ASSIGNMENT_NODE) {
                 AssignmentNode assignmentNode = (AssignmentNode) node;
                 Object value = assignmentNode.right.evaluate(env);
-                pairs[i] = new ParameterPair(((NameNode) assignmentNode.left).name, value);
+                pairs[i] = new ParameterPair(((NameNode) assignmentNode.left).variable, value);
             } else {
                 throw new SplException(String.format(
                         "Unexpected syntax in function declaration, in file '%s', at line %d",
@@ -569,18 +716,18 @@ class DefStmt extends Node {
         function.params = pairs;
         function.body = body;
 
-        env.defineFunction(name, function, position);
+        env.defineVar(name.variable, function, position);
         return function;
     }
 }
 
-class FunctionCall extends Node {
+class FunctionCall extends InternalNode {
 
-    String name;
+    NameNode name;
 
     BlockStmt arguments;
 
-    FunctionCall(final Position position, final String name) {
+    FunctionCall(final Position position, final NameNode name) {
         super(position);
 
         this.name = name;
@@ -588,12 +735,18 @@ class FunctionCall extends Node {
     }
 
     @Override
+    public void lookUp(EnvOptimizer envOptimizer) {
+        name.variable = envOptimizer.get(name.name);
+    }
+
+    @Override
     public Object evaluate(Environment env) {
-        Function function = (Function) env.get(name, position);
-        Environment callScope = new Environment(Environment.FUNCTION_SCOPE, function.outerEnv);
+//        return null;
+        Function function = (Function) env.get(name.variable, position);
+        Environment callScope = new Environment(Environment.FUNCTION_SCOPE, function.outerEnv, function.variableCount);
 //        Object[] args = new Object[function.params.length];
         for (int i = 0; i < function.params.length; i++) {
-            String argName = function.params[i].name;
+            Variable argName = function.params[i].variable;
             Object arg;
             if (i < arguments.lineCount()) {
                 arg = arguments.getLine(i).evaluate(env);
@@ -605,7 +758,7 @@ class FunctionCall extends Node {
                     arg = preset;
                 }
             }
-            callScope.defineLocal(argName, arg, position);
+            callScope.defineVar(argName, arg, position);
         }
         return function.body.evaluate(callScope);
     }

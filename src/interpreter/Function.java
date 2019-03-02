@@ -13,8 +13,11 @@ public class Function {
 
     public Environment outerEnv;
 
-    public Function(final Position position, final Environment outer) {
+    public VariableCount variableCount;
+
+    public Function(final Position position, final Environment outer, final VariableCount variableCount) {
         this.position = position;
         this.outerEnv = outer;
+        this.variableCount = variableCount;
     }
 }

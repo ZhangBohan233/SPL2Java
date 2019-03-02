@@ -1,3 +1,9 @@
-for (let i = 0; i < 1000000; i = i + 1) {
-
+function f(a) {
+    if (a > 0) {
+        f(a - 1);
+    } else {
+        0;
+    }
 }
+
+f(2);

@@ -1,5 +1,7 @@
 package parser;
 
+import interpreter.EnvOptimizer;
+import interpreter.Environment;
 import tokenizer.Position;
 import tokenizer.Token;
 import tokenizer.TokenLib;
@@ -12,10 +14,11 @@ public class Parser {
 
     private ArrayList<Token> tokens;
 
-    final static int ASSIGN = 0;
-    final static int CONST = 1;
-    final static int VAR = 2;
-    final static int LET = 3;
+    public final static int ASSIGN = 0;
+    public final static int CONST = 1;
+    public final static int VAR = 2;
+    public final static int GET = 3;
+//    final static int LET = 3;
 
     public Parser(final Tokenizer tokenizer) {
         tokens = tokenizer.getTokens();
@@ -117,9 +120,9 @@ public class Parser {
                             case "const":
                                 varLevel = CONST;
                                 break;
-                            case "let":
-                                varLevel = LET;
-                                break;
+//                            case "let":
+//                                varLevel = LET;
+//                                break;
                             case "true":
                                 ast.addBoolean(pos, true);
                                 break;
@@ -220,7 +223,9 @@ public class Parser {
             }
         }
 
-        return ast.getBlock();
+        BlockStmt blockStmt = ast.getBlock();
+        blockStmt.lookUp(new EnvOptimizer(Environment.GLOBAL_SCOPE, null));
+        return blockStmt;
     }
 
     private static boolean isUnary(Token token) {
